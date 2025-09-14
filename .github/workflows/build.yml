@@ -1,55 +1,66 @@
 name: build-ipa
+
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - "StreamManager/**"
+      - "project.yml"
+      - ".github/workflows/build.yml"
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-13   # 或 macos-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Select Xcode 15.4
-        run: sudo xcode-select -s /Applications/Xcode_15.4.app || true
+        run: sudo xcode-select -switch /Applications/Xcode_15.4.app || true
 
-      - name: Show repo tree & find project (debug)
+      - name: Show repo tree (debug)
         run: |
           pwd
           ls -la
-          echo "---- level 2 ----"
+          echo "---- StreamManager ----"
           ls -la StreamManager || true
-          echo "---- find .xcodeproj ----"
-          find . -maxdepth 3 -name "*.xcodeproj" -print
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate .xcodeproj
+        run: xcodegen generate
 
       - name: Show Xcode / SDK / Schemes (debug)
         run: |
-          xcodebuild -version
           xcodebuild -showsdks
-          xcodebuild -list -project "./StreamManager/StreamManager.xcodeproj" || true
+          xcodebuild -list -project StreamManager.xcodeproj
 
-      - name: Build (no code sign)
-        env:
-          PROJ: "./StreamManager/StreamManager.xcodeproj"   # 注意大小写！
-          SCHEME: "StreamManager"                           # 和你的 Target/Scheme 同名
-          CFG: "Release"
-          ARCHIVE_PATH: "${{ github.workspace }}/build/StreamManager.xcarchive"
+      - name: Build (no code sign) & Archive
         run: |
           set -e
-          xcodebuild -project "$PROJ" -scheme "$SCHEME" -configuration "$CFG" \
+          xcodebuild \
+            -project StreamManager.xcodeproj \
+            -scheme StreamManager \
+            -configuration Release \
             -destination 'generic/platform=iOS' \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
-            archive -archivePath "$ARCHIVE_PATH"
+            clean archive \
+            -archivePath build/StreamManager.xcarchive
 
-      - name: Package unsigned IPA
+      - name: Make unsigned IPA
         run: |
-          APP="$PWD/build/StreamManager.xcarchive/Products/Applications/StreamManager.app"
-          test -d "$APP" || { echo "App not found at $APP"; exit 1; }
+          set -e
+          APP_PATH=$(find build/StreamManager.xcarchive/Products/Applications -name "*.app" -maxdepth 1 | head -n 1)
           mkdir -p Payload
-          cp -R "$APP" Payload/
-          zip -qry StreamManager_unsigned.ipa Payload
+          cp -R "$APP_PATH" Payload/
+          zip -qry StreamManager-unsigned.ipa Payload
+          echo "IPA generated at: $(pwd)/StreamManager-unsigned.ipa"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: StreamManager_unsigned
-          path: StreamManager_unsigned.ipa
+          name: StreamManager-unsigned
+          path: StreamManager-unsigned.ipa
+          if-no-files-found: error
