@@ -1,21 +1,25 @@
 name: StreamManager
 options:
-  minimumXcodeGenVersion: 2.38.0
+  minimumXcodeGenVersion: 2.35.0
   deploymentTarget:
-    iOS: "14.0"
+    iOS: "13.0"
+packages: {}   # 以后需要 SPM 再加
+settings:
+  base:
+    IPHONEOS_DEPLOYMENT_TARGET: "13.0"
+    SWIFT_VERSION: "5.0"
+
 targets:
   StreamManager:
     type: application
     platform: iOS
     sources:
       - path: StreamManager
+    info:
+      path: StreamManager/Info.plist
     settings:
-      PRODUCT_BUNDLE_IDENTIFIER: com.yourname.StreamManager
-      INFOPLIST_FILE: StreamManager/Info.plist
-      CODE_SIGN_STYLE: Manual
-      CODE_SIGNING_ALLOWED: NO
-      CODE_SIGNING_REQUIRED: NO
-      ENABLE_BITCODE: NO
-      DEVELOPMENT_TEAM: ""
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.yourname.StreamManager
+        CODE_SIGN_STYLE: Automatic
     scheme:
       testTargets: []
