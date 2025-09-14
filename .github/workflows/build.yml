@@ -5,48 +5,66 @@ on:
 
 jobs:
   build:
-    runs-on: macos-13   # 或 macos-14，二选一都可以
+    runs-on: macos-13  # 或 macos-14，二选一，保持和你现有一致
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Select Xcode 15.4
-        run: sudo xcode-select -s /Applications/Xcode_15.4.app
+        run: sudo xcode-select -s /Applications/Xcode_15.4.app || xcodebuild -version
 
-      - name: Show Xcode / SDK / Schemes (debug)
+      - name: Show repo tree (debug)
         run: |
-          xcodebuild -version
-          xcodebuild -showsdks
-          xcodebuild -list -project StreamManager/StreamManager.xcodeproj
+          ls -la
+          echo "---- StreamManager/ ----"
+          ls -la StreamManager || true
 
-      # 用已提交的 .xcodeproj 无签名构建
+      # 如果存在 project.yml，则采用 XcodeGen 生成 .xcodeproj
+      - name: Install & run XcodeGen (if project.yml exists)
+        run: |
+          if [ -f "StreamManager/project.yml" ]; then
+            brew update
+            brew install xcodegen
+            # 防止“File exists”——先删除旧的 .xcodeproj
+            rm -rf StreamManager/StreamManager.xcodeproj
+            xcodegen generate --project "StreamManager/project.yml" --spec "StreamManager/project.yml"
+          fi
+          echo "Project tree after xcodegen:"
+          ls -la StreamManager
+
+      - name: Resolve project & scheme
+        run: |
+          echo "List schemes:"
+          xcodebuild -list -project StreamManager/StreamManager.xcodeproj
+          echo "Using scheme: StreamManager"
+
       - name: Build (no code sign)
         run: |
-          set -e
           xcodebuild \
             -project StreamManager/StreamManager.xcodeproj \
             -scheme StreamManager \
             -configuration Release \
-            -sdk iphoneos \
-            -derivedDataPath build \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            clean build
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            -archivePath build/StreamManager.xcarchive archive
 
-      # 手动打无签名 ipa
       - name: Package unsigned IPA
         run: |
-          set -e
-          APP_PATH=$(ls -d build/Build/Products/Release-iphoneos/*.app | head -n 1)
-          echo "App path: $APP_PATH"
-          mkdir -p output/Payload
-          cp -R "$APP_PATH" output/Payload/
-          cd output
-          /usr/bin/zip -qry StreamManager-unsigned.ipa Payload
+          APP_PATH="build/StreamManager.xcarchive/Products/Applications/StreamManager.app"
+          if [ ! -d "$APP_PATH" ]; then
+            echo "App not found at $APP_PATH"
+            exit 1
+          fi
+          mkdir -p Payload
+          cp -R "$APP_PATH" Payload/
+          IPA_NAME="StreamManager-unsigned.zip"
+          /usr/bin/zip -qry "$IPA_NAME" Payload
+          mv "$IPA_NAME" StreamManager-unsigned.ipa
+          rm -rf Payload
           ls -lh StreamManager-unsigned.ipa
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: StreamManager-unsigned-ipa
-          path: output/StreamManager-unsigned.ipa
-          if-no-files-found: error
+          name: StreamManager-unsigned
+          path: StreamManager-unsigned.ipa
