@@ -23,11 +23,15 @@ jobs:
           xcodebuild -version
           xcodebuild -showsdks
 
-      - name: List repo (top)
+      - name: Install & Run XcodeGen (when project.yml exists)
+        if: hashFiles('project.yml') != ''
         run: |
-          echo "::group::tree /"
-          ls -la
-          echo "::endgroup::"
+          set -e
+          brew update
+          brew install xcodegen
+          xcodegen --version
+          xcodegen generate
+          echo "✅ Generated .xcodeproj from project.yml"
 
       - name: Resolve project & scheme
         id: resolve
@@ -36,18 +40,13 @@ jobs:
           set -e
           PROJECT_PATH=$(ls -1 **/*.xcodeproj | head -n1 || true)
           if [[ -z "$PROJECT_PATH" ]]; then
-            echo "❌ 没找到 .xcodeproj，请确认已提交到仓库" >&2
+            echo "❌ 没找到 .xcodeproj（也没生成成功），请检查 project.yml" >&2
             exit 1
           fi
           echo "project=$PROJECT_PATH" >> $GITHUB_OUTPUT
-
           SCHEME=$(xcodebuild -list -project "$PROJECT_PATH" 2>/dev/null | awk '/Schemes:/{flag=1;next}/^$/{flag=0}flag' | head -n1 | xargs || echo "")
-          if [[ -z "$SCHEME" ]]; then
-            # 兜底：用目录名（你的工程就叫 StreamManager）
-            SCHEME="StreamManager"
-          fi
+          if [[ -z "$SCHEME" ]]; then SCHEME="StreamManager"; fi
           echo "scheme=$SCHEME" >> $GITHUB_OUTPUT
-
           echo "➡️ PROJECT_PATH=$PROJECT_PATH"
           echo "➡️ SCHEME=$SCHEME"
 
@@ -70,16 +69,13 @@ jobs:
           BUILD_DIR=$(xcodebuild -project "${{ steps.resolve.outputs.project }}" -scheme "${{ steps.resolve.outputs.scheme }}" -showBuildSettings -configuration Release | awk '/BUILD_DIR =/ {print $3}' | tail -1)
           APP_NAME="${{ steps.resolve.outputs.scheme }}"
           APP_PATH="${BUILD_DIR}/Release-iphoneos/${APP_NAME}.app"
-
           echo "BUILD_DIR=$BUILD_DIR"
           echo "APP_PATH=$APP_PATH"
-
           if [ ! -d "$APP_PATH" ]; then
             echo "❌ 未找到 .app：$APP_PATH"
             ls -la "${BUILD_DIR}/Release-iphoneos" || true
             exit 1
           fi
-
           mkdir -p Payload
           cp -R "$APP_PATH" Payload/
           zip -qry "${APP_NAME}-unsigned.ipa" Payload
