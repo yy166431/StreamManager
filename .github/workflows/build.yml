@@ -4,7 +4,6 @@ on:
   workflow_dispatch:
   push:
     branches: [ main ]
-  pull_request:
 
 jobs:
   build:
@@ -12,7 +11,7 @@ jobs:
 
     steps:
       - name: Checkout
-      - uses: actions/checkout@v4
+        uses: actions/checkout@v4
 
       - name: Select Xcode 15.4
         uses: maxim-lobanov/setup-xcode@v1
@@ -24,8 +23,14 @@ jobs:
           xcodebuild -version
           xcodebuild -showsdks
 
-      # === 可选：仅当仓库里存在 project.yml 时，下载并执行 XcodeGen 生成 .xcodeproj ===
-      - name: Install XcodeGen (binary)
+      - name: List repo (top)
+        run: |
+          echo "::group::tree /"
+          ls -la
+          echo "::endgroup::"
+
+      # 如果仓库里有 project.yml，就用 XcodeGen 生成 .xcodeproj（没有会自动跳过）
+      - name: Install & Run XcodeGen (if project.yml exists)
         if: hashFiles('project.yml') != ''
         run: |
           set -e
@@ -35,24 +40,35 @@ jobs:
           xcodegen --version
           xcodegen
 
-      - name: Show repo tree (debug)
+      # --- 自动定位 .xcodeproj 与 Scheme（默认按你的仓库命名；找不到就报错） ---
+      - name: Resolve project & scheme
+        id: resolve
+        shell: bash
         run: |
-          echo "::group::Tree"
-          ls -la
-          echo
-          ls -la StreamManager || true
-          echo "::endgroup::"
+          set -e
+          PROJECT_PATH=$(ls -1 **/*.xcodeproj | head -n1 || true)
+          if [[ -z "$PROJECT_PATH" ]]; then
+            echo "❌ 没找到 .xcodeproj，请确认已提交到仓库" >&2
+            exit 1
+          fi
+          echo "project=$PROJECT_PATH" >> $GITHUB_OUTPUT
 
-      # ===== 关键：无签名构建 iOS Release =====
+          # 从 xcodeproj 读 scheme；读不到就用目录名 StreamManager 兜底
+          SCHEME=$(xcodebuild -list -project "$PROJECT_PATH" 2>/dev/null | awk '/Schemes:/{flag=1;next}/^$/{flag=0}flag' | head -n1 | xargs || echo "")
+          if [[ -z "$SCHEME" ]]; then
+            SCHEME="StreamManager"
+          fi
+          echo "scheme=$SCHEME" >> $GITHUB_OUTPUT
+
+          echo "➡️ PROJECT_PATH=$PROJECT_PATH"
+          echo "➡️ SCHEME=$SCHEME"
+
       - name: Build (no code sign)
-        env:
-          PROJECT_PATH: ./StreamManager/StreamManager.xcodeproj   # 如有变动，改这里
-          SCHEME: StreamManager
         run: |
           set -e
           xcodebuild \
-            -project "$PROJECT_PATH" \
-            -scheme "$SCHEME" \
+            -project "${{ steps.resolve.outputs.project }}" \
+            -scheme  "${{ steps.resolve.outputs.scheme }}" \
             -configuration Release \
             -sdk iphoneos \
             CODE_SIGNING_ALLOWED=NO \
@@ -60,32 +76,33 @@ jobs:
             CODE_SIGNING_IDENTITY="" \
             build | xcpretty || exit 1
 
-      # ===== 手动打包 IPA：把 .app 放到 Payload 里 zip =====
       - name: Package unsigned IPA
-        env:
-          APP_NAME: StreamManager
         run: |
           set -e
-          BUILD_DIR=$(xcodebuild -project ./StreamManager/StreamManager.xcodeproj -scheme StreamManager -showBuildSettings -configuration Release | awk '/BUILD_DIR/ {print $3}' | tail -1)
+          # 读取 Xcode 的 BUILD_DIR
+          BUILD_DIR=$(xcodebuild -project "${{ steps.resolve.outputs.project }}" -scheme "${{ steps.resolve.outputs.scheme }}" -showBuildSettings -configuration Release | awk '/BUILD_DIR =/ {print $3}' | tail -1)
+          APP_NAME="${{ steps.resolve.outputs.scheme }}"
           APP_PATH="${BUILD_DIR}/Release-iphoneos/${APP_NAME}.app"
+
+          echo "BUILD_DIR=$BUILD_DIR"
+          echo "APP_PATH=$APP_PATH"
 
           if [ ! -d "$APP_PATH" ]; then
             echo "❌ 未找到 .app：$APP_PATH"
+            echo "📁 实际 Release-iphoneos 内容如下："
+            ls -la "${BUILD_DIR}/Release-iphoneos" || true
             exit 1
           fi
 
           mkdir -p Payload
           cp -R "$APP_PATH" Payload/
-          # 可选：去掉 dSYM 以缩小体积
           zip -qry "${APP_NAME}-unsigned.ipa" Payload
           rm -rf Payload
-
-          echo "✅ IPA 已生成：${APP_NAME}-unsigned.ipa"
           ls -lh "${APP_NAME}-unsigned.ipa"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: StreamManager-unsigned
-          path: StreamManager-unsigned.ipa
+          path: "*.ipa"
           if-no-files-found: error
