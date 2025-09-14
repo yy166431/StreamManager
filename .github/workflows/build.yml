@@ -29,18 +29,6 @@ jobs:
           ls -la
           echo "::endgroup::"
 
-      # 如果仓库里有 project.yml，就用 XcodeGen 生成 .xcodeproj（没有会自动跳过）
-      - name: Install & Run XcodeGen (if project.yml exists)
-        if: hashFiles('project.yml') != ''
-        run: |
-          set -e
-          VER=2.38.0
-          curl -L "https://github.com/yonaskolb/XcodeGen/releases/download/${VER}/xcodegen-${VER}.zip" -o xcodegen.zip
-          unzip -q xcodegen.zip -d xg && sudo mv xg/xcodegen /usr/local/bin/xcodegen
-          xcodegen --version
-          xcodegen
-
-      # --- 自动定位 .xcodeproj 与 Scheme（默认按你的仓库命名；找不到就报错） ---
       - name: Resolve project & scheme
         id: resolve
         shell: bash
@@ -53,9 +41,9 @@ jobs:
           fi
           echo "project=$PROJECT_PATH" >> $GITHUB_OUTPUT
 
-          # 从 xcodeproj 读 scheme；读不到就用目录名 StreamManager 兜底
           SCHEME=$(xcodebuild -list -project "$PROJECT_PATH" 2>/dev/null | awk '/Schemes:/{flag=1;next}/^$/{flag=0}flag' | head -n1 | xargs || echo "")
           if [[ -z "$SCHEME" ]]; then
+            # 兜底：用目录名（你的工程就叫 StreamManager）
             SCHEME="StreamManager"
           fi
           echo "scheme=$SCHEME" >> $GITHUB_OUTPUT
@@ -79,7 +67,6 @@ jobs:
       - name: Package unsigned IPA
         run: |
           set -e
-          # 读取 Xcode 的 BUILD_DIR
           BUILD_DIR=$(xcodebuild -project "${{ steps.resolve.outputs.project }}" -scheme "${{ steps.resolve.outputs.scheme }}" -showBuildSettings -configuration Release | awk '/BUILD_DIR =/ {print $3}' | tail -1)
           APP_NAME="${{ steps.resolve.outputs.scheme }}"
           APP_PATH="${BUILD_DIR}/Release-iphoneos/${APP_NAME}.app"
@@ -89,7 +76,6 @@ jobs:
 
           if [ ! -d "$APP_PATH" ]; then
             echo "❌ 未找到 .app：$APP_PATH"
-            echo "📁 实际 Release-iphoneos 内容如下："
             ls -la "${BUILD_DIR}/Release-iphoneos" || true
             exit 1
           fi
